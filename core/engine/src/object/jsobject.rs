@@ -20,7 +20,7 @@ use crate::{
     property::{PropertyDescriptor, PropertyKey},
     value::PreferredType,
 };
-use boa_gc::{self, Finalize, Gc, GcRef, GcRefCell, GcRefMut, Trace};
+use boa_gc::{self, Finalize, Gc, GcRef, GcRefCell, GcRefMut, Trace, WeakGc};
 use core::ptr::fn_addr_eq;
 use std::collections::HashSet;
 use std::{
@@ -1046,10 +1046,44 @@ impl<T: NativeObject> JsObject<T> {
         Self { inner }
     }
 
+    /// Returns a weak reference to this object.
+    ///
+    /// Unlike a [`JsObject`] (or any captured [`JsValue`]), a [`WeakJsObject`] does
+    /// **not** keep the object alive: it can be held in a host-side cache and later
+    /// [`upgrade`](WeakJsObject::upgrade)d, yielding `None` once the object has been
+    /// collected. The serval reflector cache uses this to learn when script has
+    /// dropped the last reference to a DOM reflector.
+    #[must_use]
+    pub fn downgrade(&self) -> WeakJsObject<T> {
+        WeakJsObject(WeakGc::new(&self.inner))
+    }
+
     /// Create a new private name with this object as the unique identifier.
     pub(crate) fn private_name(&self, description: JsString) -> PrivateName {
         let ptr: *const _ = self.as_ref();
         PrivateName::new(description, ptr.cast::<()>() as usize)
+    }
+}
+
+/// A weak reference to a [`JsObject`], obtained from [`JsObject::downgrade`].
+///
+/// Holding a `WeakJsObject` does not prevent the referenced object from being
+/// garbage-collected. [`upgrade`](WeakJsObject::upgrade) returns the live object,
+/// or `None` once it has been collected.
+#[derive(Trace, Finalize, Clone)]
+pub struct WeakJsObject<T: NativeObject = ErasedObjectData>(WeakGc<VTableObject<T>>);
+
+impl<T: NativeObject> Debug for WeakJsObject<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("WeakJsObject").field("alive", &self.0.upgrade().is_some()).finish()
+    }
+}
+
+impl<T: NativeObject> WeakJsObject<T> {
+    /// Upgrade to a strong [`JsObject`], or `None` if the object has been collected.
+    #[must_use]
+    pub fn upgrade(&self) -> Option<JsObject<T>> {
+        self.0.upgrade().map(JsObject::from_inner)
     }
 }
 
