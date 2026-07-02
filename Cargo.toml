@@ -53,7 +53,7 @@ small_btree = { version = "~0.1.0", path = "utils/small_btree" }
 # Shared deps
 arbitrary = "1"
 base64 = "0.22.1"
-bitflags = "2.11.1"
+bitflags = "2.13.0"
 clap = "4.6.1"
 colored = "3.1.1"
 cow-utils = "0.1.3"
@@ -90,7 +90,7 @@ time = { version = "0.3.47", default-features = false, features = [
     "formatting",
     "macros",
 ] }
-log = "0.4.30"
+log = "0.4.32"
 simple_logger = "5.1.0"
 cargo_metadata = "0.23.1"
 trybuild = "1.0.116"
@@ -120,7 +120,7 @@ tap = "1.0.1"
 thiserror = { version = "2.0.18", default-features = false }
 dashmap = "6.2.1"
 num_enum = "0.7.6"
-itertools = { version = "0.14.0", default-features = false }
+itertools = { version = "0.15.0", default-features = false }
 portable-atomic = "1.13.1"
 bytemuck = { version = "1.25.0", default-features = false }
 arrayvec = "0.7.6"
@@ -172,7 +172,7 @@ icu_normalizer = { version = "~2.2.0", default-features = false }
 icu_decimal = { version = "~2.2.0", default-features = false }
 writeable = "0.6.2"
 tinystr = "0.8.2"
-yoke = "0.8.1"
+yoke = "0.8.3"
 zerofrom = "0.1.8"
 fixed_decimal = "0.7.2"
 
