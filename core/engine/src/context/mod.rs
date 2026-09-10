@@ -107,6 +107,10 @@ pub struct Context {
 
     pub(crate) kept_alive: Vec<JsObject>,
 
+    /// Caller realms saved while native functions temporarily replace the
+    /// running frame's realm. Unlike a script call, a native call has no frame.
+    pub(crate) native_caller_realms: Vec<(usize, Realm)>,
+
     can_block: bool,
 
     #[cfg(any(feature = "temporal", feature = "intl"))]
@@ -461,6 +465,21 @@ impl Context {
     #[must_use]
     pub fn realm(&self) -> &Realm {
         &self.vm.frame().realm
+    }
+
+    /// Returns the nearest authored ECMAScript caller's realm during a native call.
+    ///
+    /// Native calls swap the current script frame's realm without pushing a
+    /// script frame. The oldest saved realm at this frame depth precedes every
+    /// native trampoline (`call`, `apply`, constructors) on that frame. A native
+    /// invoking an authored callback pushes a new script frame and therefore
+    /// starts a new provenance chain. This is not HTML's backup incumbent stack.
+    #[must_use]
+    pub fn native_caller_realm(&self) -> Option<&Realm> {
+        let depth = self.vm.frames.len();
+        self.native_caller_realms.iter()
+            .find(|(caller_depth, _)| *caller_depth == depth)
+            .map(|(_, realm)| realm)
     }
 
     /// Set the value of trace on the context
@@ -1252,6 +1271,7 @@ impl ContextBuilder {
             #[cfg(feature = "fuzz")]
             instructions_remaining: self.instructions_remaining,
             kept_alive: Vec::new(),
+            native_caller_realms: Vec::new(),
             host_hooks,
             clock,
             job_executor,

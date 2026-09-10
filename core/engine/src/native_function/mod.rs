@@ -356,6 +356,9 @@ pub(crate) fn native_function_call(
 
     let mut realm = realm.unwrap_or_else(|| context.realm().clone());
 
+    let caller_realm = context.realm().clone();
+    let caller_depth = context.vm.frames.len();
+    context.native_caller_realms.push((caller_depth, caller_realm));
     context.swap_realm(&mut realm);
     context.vm.native_active_function = Some(this_function_object);
 
@@ -368,6 +371,7 @@ pub(crate) fn native_function_call(
 
     context.vm.native_active_function = None;
     context.swap_realm(&mut realm);
+    context.native_caller_realms.pop();
 
     context.vm.shadow_stack.pop();
 
@@ -411,6 +415,9 @@ fn native_function_construct(
 
     let mut realm = realm.unwrap_or_else(|| context.realm().clone());
 
+    let caller_realm = context.realm().clone();
+    let caller_depth = context.vm.frames.len();
+    context.native_caller_realms.push((caller_depth, caller_realm));
     context.swap_realm(&mut realm);
     context.vm.native_active_function = Some(this_function_object);
 
@@ -450,6 +457,7 @@ fn native_function_construct(
 
     context.vm.native_active_function = None;
     context.swap_realm(&mut realm);
+    context.native_caller_realms.pop();
 
     context.vm.shadow_stack.pop();
 
