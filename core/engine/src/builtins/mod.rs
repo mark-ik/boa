@@ -362,7 +362,7 @@ pub(crate) fn set_default_global_bindings(context: &mut Context) -> JsResult<()>
     global_object.define_property_or_throw(
         js_string!("globalThis"),
         PropertyDescriptor::builder()
-            .value(context.realm().global_this().clone())
+            .value(context.realm().global_this())
             .writable(true)
             .enumerable(false)
             .configurable(true),

@@ -71,7 +71,7 @@ impl CheckReturn {
                         return context.handle_throw();
                     }
                     Ok(Some(this)) => this,
-                    Ok(None) => context.realm().global_this().clone().into(),
+                    Ok(None) => context.realm().global_this().into(),
                 }
             }
         };

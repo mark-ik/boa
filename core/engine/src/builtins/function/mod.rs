@@ -1042,7 +1042,7 @@ pub(crate) fn function_call(
             ThisBindingStatus::Initialized(this)
         } else if this.is_null_or_undefined() {
             context.vm.frame_mut().flags |= CallFrameFlags::THIS_VALUE_CACHED;
-            let this: JsValue = context.realm().global_this().clone().into();
+            let this: JsValue = context.realm().global_this().into();
             context.vm.stack.set_this(
                 context.vm.frames.last().js_expect("frame must exist")?,
                 this.clone(),

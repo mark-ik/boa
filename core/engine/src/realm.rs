@@ -16,6 +16,7 @@ use crate::{
         intrinsics::{Intrinsics, StandardConstructor},
     },
     environments::DeclarativeEnvironment,
+    js_string,
     module::Module,
     object::shape::RootShape,
 };
@@ -66,7 +67,12 @@ struct Inner {
     scope: Scope,
 
     global_object: JsObject,
-    global_this: JsObject,
+
+    /// The global `this` value of this realm.
+    ///
+    /// Mutable so that an embedder can replace it after realm creation; see
+    /// [`Realm::set_global_this`].
+    global_this: GcRefCell<JsObject>,
     template_map: GcRefCell<FxHashMap<u64, JsObject>>,
     loaded_modules: GcRefCell<FxHashMap<JsString, Module>>,
     host_classes: GcRefCell<FxHashMap<TypeId, StandardConstructor>>,
@@ -95,7 +101,7 @@ impl Realm {
                 environment,
                 scope,
                 global_object,
-                global_this,
+                global_this: GcRefCell::new(global_this),
                 template_map: GcRefCell::default(),
                 loaded_modules: GcRefCell::default(),
                 host_classes: GcRefCell::default(),
@@ -176,8 +182,36 @@ impl Realm {
         &self.inner.global_object
     }
 
-    pub(crate) fn global_this(&self) -> &JsObject {
-        &self.inner.global_this
+    pub(crate) fn global_this(&self) -> JsObject {
+        self.inner.global_this.borrow().clone()
+    }
+
+    /// Replaces the global `this` value of this realm.
+    ///
+    /// [`HostHooks::create_global_this`] runs during realm creation, before any
+    /// [`Context`] exists, so a host that needs a global `this` built with a
+    /// live context (an exotic forwarding object, for example) cannot supply one
+    /// there. This is the counterpart for that case: call it once the context
+    /// exists and before any script runs in the realm.
+    ///
+    /// Besides the realm's own `[[GlobalThisValue]]`, this redefines the
+    /// `globalThis` property of the global object, which
+    /// [`SetDefaultGlobalBindings`][spec] installed as a snapshot of the
+    /// original value.
+    ///
+    /// [spec]: https://tc39.es/ecma262/#sec-setdefaultglobalbindings
+    pub fn set_global_this(&self, global_this: JsObject, context: &mut Context) -> JsResult<()> {
+        *self.inner.global_this.borrow_mut() = global_this.clone();
+        self.global_object().define_property_or_throw(
+            js_string!("globalThis"),
+            PropertyDescriptor::builder()
+                .value(global_this)
+                .writable(true)
+                .enumerable(false)
+                .configurable(true),
+            context,
+        )?;
+        Ok(())
     }
 
     pub(crate) fn loaded_modules(&self) -> &GcRefCell<FxHashMap<JsString, Module>> {
@@ -253,5 +287,48 @@ impl Realm {
     pub(crate) fn addr(&self) -> *const () {
         let ptr: *const _ = &raw const *self.inner;
         ptr.cast()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Context, JsObject, JsValue, js_string, property::PropertyKey};
+
+    /// `Realm::set_global_this` replaces the realm's global `this` after the
+    /// context exists: `globalThis`, the sloppy-mode substituted `this` of a
+    /// function call, and the `this` of global code all observe the new value.
+    #[test]
+    fn set_global_this_replaces_the_realm_global_this() {
+        let mut context = Context::default();
+
+        let replacement = JsObject::with_object_proto(context.intrinsics());
+        replacement
+            .set(
+                PropertyKey::from(js_string!("marker")),
+                JsValue::from(42),
+                true,
+                &mut context,
+            )
+            .unwrap();
+
+        let realm = context.realm().clone();
+        realm
+            .set_global_this(replacement.clone(), &mut context)
+            .unwrap();
+
+        let expected = JsValue::from(replacement);
+
+        for source in [
+            "globalThis",
+            "(function () { return this; })()",
+            "this",
+            "globalThis.marker === 42 ? globalThis : null",
+        ] {
+            let observed = context.eval(crate::Source::from_bytes(source)).unwrap();
+            assert_eq!(
+                observed, expected,
+                "`{source}` did not observe the replaced global this"
+            );
+        }
     }
 }

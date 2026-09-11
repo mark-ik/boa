@@ -68,7 +68,7 @@ impl This {
             .frame()
             .environments
             .get_this_binding()?
-            .unwrap_or(context.realm().global_this().clone().into());
+            .unwrap_or(context.realm().global_this().into());
         context.vm.frame_mut().flags |= CallFrameFlags::THIS_VALUE_CACHED;
         context.vm.stack.set_this(
             context.vm.frames.last().js_expect("frame must exist")?,
