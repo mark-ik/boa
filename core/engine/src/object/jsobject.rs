@@ -1075,9 +1075,7 @@ pub struct WeakJsObject<T: NativeObject = ErasedObjectData>(WeakGc<VTableObject<
 
 impl<T: NativeObject> Debug for WeakJsObject<T> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("WeakJsObject")
-            .field("alive", &self.0.upgrade().is_some())
-            .finish()
+        f.debug_struct("WeakJsObject").field("alive", &self.0.upgrade().is_some()).finish()
     }
 }
 

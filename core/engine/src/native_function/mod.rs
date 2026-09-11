@@ -358,9 +358,7 @@ pub(crate) fn native_function_call(
 
     let caller_realm = context.realm().clone();
     let caller_depth = context.vm.frames.len();
-    context
-        .native_caller_realms
-        .push((caller_depth, caller_realm));
+    context.native_caller_realms.push((caller_depth, caller_realm));
     context.swap_realm(&mut realm);
     context.vm.native_active_function = Some(this_function_object);
 
@@ -419,9 +417,7 @@ fn native_function_construct(
 
     let caller_realm = context.realm().clone();
     let caller_depth = context.vm.frames.len();
-    context
-        .native_caller_realms
-        .push((caller_depth, caller_realm));
+    context.native_caller_realms.push((caller_depth, caller_realm));
     context.swap_realm(&mut realm);
     context.vm.native_active_function = Some(this_function_object);
 

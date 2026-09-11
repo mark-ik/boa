@@ -477,8 +477,7 @@ impl Context {
     #[must_use]
     pub fn native_caller_realm(&self) -> Option<&Realm> {
         let depth = self.vm.frames.len();
-        self.native_caller_realms
-            .iter()
+        self.native_caller_realms.iter()
             .find(|(caller_depth, _)| *caller_depth == depth)
             .map(|(_, realm)| realm)
     }
