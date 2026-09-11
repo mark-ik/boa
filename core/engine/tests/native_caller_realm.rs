@@ -1,5 +1,10 @@
+#![allow(unused_crate_dependencies)]
+//! Native caller-realm provenance survives nested native exceptions and
+//! call/apply trampolines.
+
 use boa_engine::{Context, JsNativeError, JsResult, JsValue, NativeFunction, Source, js_string};
 
+#[allow(clippy::unnecessary_wraps)]
 fn caller_differs(_: &JsValue, _: &[JsValue], context: &mut Context) -> JsResult<JsValue> {
     let caller = context
         .native_caller_realm()
