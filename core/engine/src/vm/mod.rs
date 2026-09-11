@@ -952,6 +952,9 @@ impl Context {
     #[allow(clippy::future_not_send)]
     pub(crate) async fn run_async_with_budget(&mut self, budget: u32) -> CompletionRecord {
         let mut runtime_budget: u32 = budget;
+        // Code is about to run in this realm, so its global `this` can no
+        // longer be replaced: see `Realm::finish_global_this_initialization`.
+        self.realm().fix_global_this();
 
         while let Some(byte) = self
             .vm
@@ -986,6 +989,9 @@ impl Context {
     }
 
     pub(crate) fn run(&mut self) -> CompletionRecord {
+        // Code is about to run in this realm, so its global `this` can no
+        // longer be replaced: see `Realm::finish_global_this_initialization`.
+        self.realm().fix_global_this();
         while let Some(byte) = self
             .vm
             .frame()
