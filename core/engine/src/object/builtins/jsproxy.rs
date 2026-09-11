@@ -33,6 +33,28 @@ impl JsProxy {
         JsProxyBuilder::new(target)
     }
 
+    /// Creates a `Proxy` over `target` with `handler` as its handler object.
+    ///
+    /// This is `ProxyCreate` verbatim, for the embedder that needs the handler
+    /// to be an ordinary JavaScript object rather than the fixed set of native
+    /// traps a [`JsProxyBuilder`] installs. A handler whose trap properties are
+    /// accessors, for instance, resolves each trap at the moment it is used,
+    /// which is how a host can hand out a proxy before the code implementing
+    /// its behaviour exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `TypeError` if either argument is not an object.
+    pub fn with_handler(
+        target: &JsValue,
+        handler: &JsValue,
+        context: &mut Context,
+    ) -> JsResult<Self> {
+        Ok(Self {
+            inner: Proxy::create(target, handler, context)?,
+        })
+    }
+
     /// Create a [`JsProxy`] from a [`JsObject`], if the object is not a `Proxy` throw a
     /// `TypeError`.
     #[inline]
