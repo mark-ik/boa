@@ -346,7 +346,7 @@ impl IntrinsicObject for ArrayBuffer {
             .name(js_string!("get maxByteLength"))
             .build();
 
-        #[cfg(feature = "experimental")]
+        #[cfg(any(feature = "experimental", feature = "array-buffer-transfer"))]
         let get_detached = BuiltInBuilder::callable(realm, Self::get_detached)
             .name(js_string!("get detached"))
             .build();
@@ -385,7 +385,7 @@ impl IntrinsicObject for ArrayBuffer {
                 Attribute::READONLY | Attribute::NON_ENUMERABLE | Attribute::CONFIGURABLE,
             );
 
-        #[cfg(feature = "experimental")]
+        #[cfg(any(feature = "experimental", feature = "array-buffer-transfer"))]
         let builder = builder
             .accessor(
                 js_string!("detached"),
@@ -571,8 +571,8 @@ impl ArrayBuffer {
 
     /// [`get ArrayBuffer.prototype.detached`][spec].
     ///
-    /// [spec]: https://tc39.es/proposal-arraybuffer-transfer/#sec-get-arraybuffer.prototype.detached
-    #[cfg(feature = "experimental")]
+    /// [spec]: https://tc39.es/ecma262/#sec-get-arraybuffer.prototype.detached
+    #[cfg(any(feature = "experimental", feature = "array-buffer-transfer"))]
     fn get_detached(
         this: &JsValue,
         _args: &[JsValue],
@@ -748,9 +748,9 @@ impl ArrayBuffer {
     /// [`ArrayBuffer.prototype.transfer ( [ newLength ] )`][transfer] and
     /// [`ArrayBuffer.prototype.transferToFixedLength ( [ newLength ] )`][transferFL]
     ///
-    /// [transfer]: https://tc39.es/proposal-arraybuffer-transfer/#sec-arraybuffer.prototype.transfer
-    /// [transferFL]: https://tc39.es/proposal-arraybuffer-transfer/#sec-arraybuffer.prototype.transfertofixedlength
-    #[cfg(feature = "experimental")]
+    /// [transfer]: https://tc39.es/ecma262/#sec-arraybuffer.prototype.transfer
+    /// [transferFL]: https://tc39.es/ecma262/#sec-arraybuffer.prototype.transfertofixedlength
+    #[cfg(any(feature = "experimental", feature = "array-buffer-transfer"))]
     fn transfer<const TO_FIXED_LENGTH: bool>(
         this: &JsValue,
         args: &[JsValue],
@@ -760,7 +760,7 @@ impl ArrayBuffer {
         // 2. Return ? ArrayBufferCopyAndDetach(O, newLength, preserve-resizability).
 
         // Abstract operation `ArrayBufferCopyAndDetach ( arrayBuffer, newLength, preserveResizability )`
-        // https://tc39.es/proposal-arraybuffer-transfer/#sec-arraybuffercopyanddetach
+        // https://tc39.es/ecma262/#sec-arraybuffercopyanddetach
 
         let new_length = args.get_or_undefined(0);
 
@@ -788,11 +788,11 @@ impl ArrayBuffer {
         };
 
         // 5. If IsDetachedBuffer(arrayBuffer) is true, throw a TypeError exception.
-        let Some(mut bytes) = buf.borrow_mut().data_mut().data.take() else {
+        if buf.borrow().data().is_detached() {
             return Err(JsNativeError::typ()
                 .with_message("cannot transfer a detached buffer")
                 .into());
-        };
+        }
 
         // 6. If preserveResizability is preserve-resizability and IsResizableArrayBuffer(arrayBuffer)
         //    is true, then
@@ -807,7 +807,6 @@ impl ArrayBuffer {
 
         // 8. If arrayBuffer.[[ArrayBufferDetachKey]] is not undefined, throw a TypeError exception.
         if !buf.borrow().data().detach_key.is_undefined() {
-            buf.borrow_mut().data_mut().data = Some(bytes);
             return Err(JsNativeError::typ()
                 .with_message("cannot transfer a buffer with a detach key")
                 .into());
@@ -825,21 +824,59 @@ impl ArrayBuffer {
         //     observable. Implementations may implement this method as a zero-copy move or a realloc.
         // 15. Perform ! DetachArrayBuffer(arrayBuffer).
         // 16. Return newBuffer.
-        if let Some(new_max_len) = new_max_len {
-            if new_len > new_max_len {
-                buf.borrow_mut().data_mut().data = Some(bytes);
-                return Err(JsNativeError::range()
-                    .with_message("`length` cannot be bigger than `maxByteLength`")
-                    .into());
-            }
-            // Should only truncate without reallocating.
-            bytes.resize(new_len as usize, 0);
-        } else {
-            bytes.resize(new_len as usize, 0);
-
-            // Realloc the vec to fit onto the new exact length.
-            bytes.shrink_to_fit();
+        if new_max_len.is_some_and(|max_len| new_len > max_len) {
+            return Err(JsNativeError::range()
+                .with_message("`length` cannot be bigger than `maxByteLength`")
+                .into());
         }
+
+        // AllocateArrayBuffer creates the full maximum block for a resizable buffer. For a fixed
+        // result it creates only the requested byte length. Apply the same host limit even though
+        // this implementation can reuse the source allocation.
+        let allocation_len = new_max_len.unwrap_or(new_len);
+        if allocation_len > context.host_hooks().max_buffer_size(context) {
+            return Err(JsNativeError::range()
+                .with_message("cannot allocate a buffer that exceeds the maximum buffer size")
+                .into());
+        }
+
+        let new_len = usize::try_from(new_len).map_err(|error| {
+            JsNativeError::range()
+                .with_message(format!("couldn't allocate the data block: {error}"))
+        })?;
+
+        // Reserve before detaching the source so a capacity error leaves its bytes and attachment
+        // state unchanged. `resize` below is then guaranteed not to allocate.
+        {
+            let mut source = buf.borrow_mut();
+            let bytes = source
+                .data_mut()
+                .data
+                .as_mut()
+                .expect("the buffer was checked as attached above");
+            let additional = new_len.saturating_sub(bytes.len());
+            bytes.try_reserve_exact(additional).map_err(|error| {
+                let message = match error {
+                    aligned_vec::TryReserveError::CapacityOverflow => {
+                        format!("capacity overflow while allocating data block of size {new_len}")
+                    }
+                    aligned_vec::TryReserveError::AllocError { layout } => {
+                        format!("invalid layout {layout:?} while allocating data block")
+                    }
+                };
+                JsNativeError::range().with_message(message)
+            })?;
+        }
+
+        let mut bytes = buf
+            .borrow_mut()
+            .data_mut()
+            .data
+            .take()
+            .expect("the buffer was checked as attached above");
+        bytes.resize(new_len, 0);
+        // Keep the moved allocation's capacity: aligned-vec's shrink_to_fit uses an infallible
+        // realloc path. The excess capacity is not observable from JavaScript.
 
         let prototype = context
             .intrinsics()

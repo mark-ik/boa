@@ -1,6 +1,170 @@
 use crate::object::JsArrayBuffer;
 use crate::{TestAction, run_test_actions};
 
+#[cfg(any(feature = "experimental", feature = "array-buffer-transfer"))]
+use crate::{Context, Source, context::ContextBuilder, context::HostHooks};
+
+#[cfg(any(feature = "experimental", feature = "array-buffer-transfer"))]
+struct TransferLimitHooks;
+
+#[cfg(any(feature = "experimental", feature = "array-buffer-transfer"))]
+impl HostHooks for TransferLimitHooks {
+    fn max_buffer_size(&self, _context: &mut Context) -> u64 {
+        4
+    }
+}
+
+#[cfg(any(feature = "experimental", feature = "array-buffer-transfer"))]
+#[test]
+fn transfer_apis_are_exposed_when_enabled() {
+    run_test_actions([
+        TestAction::assert("typeof ArrayBuffer.prototype.transfer === 'function'"),
+        TestAction::assert("typeof ArrayBuffer.prototype.transferToFixedLength === 'function'"),
+        TestAction::assert(
+            "Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'detached').get !== undefined",
+        ),
+    ]);
+}
+
+#[cfg(all(feature = "array-buffer-transfer", not(feature = "experimental")))]
+#[test]
+fn transfer_feature_does_not_enable_unrelated_experimental_apis() {
+    run_test_actions([TestAction::assert("typeof Atomics.pause === 'undefined'")]);
+}
+
+#[cfg(any(feature = "experimental", feature = "array-buffer-transfer"))]
+#[test]
+fn transfer_copies_resizes_and_detaches() {
+    run_test_actions([
+        TestAction::run(
+            r#"
+            const source = new ArrayBuffer(3);
+            const sourceBytes = new Uint8Array(source);
+            sourceBytes.set([5, 9, 13]);
+            const moved = source.transfer();
+            const movedBytes = new Uint8Array(moved);
+            "#,
+        ),
+        TestAction::assert("moved.byteLength === 3"),
+        TestAction::assert("movedBytes[0] === 5 && movedBytes[1] === 9 && movedBytes[2] === 13"),
+        TestAction::assert("source.detached === true && source.byteLength === 0"),
+        TestAction::run(
+            r#"
+            const shortSource = new ArrayBuffer(3);
+            new Uint8Array(shortSource).set([2, 4, 6]);
+            const longer = shortSource.transfer(5);
+            "#,
+        ),
+        TestAction::assert("longer.byteLength === 5"),
+        TestAction::assert("new Uint8Array(longer)[0] === 2 && new Uint8Array(longer)[2] === 6"),
+        TestAction::assert("new Uint8Array(longer)[3] === 0 && new Uint8Array(longer)[4] === 0"),
+        TestAction::run(
+            r#"
+            const longSource = new ArrayBuffer(4);
+            new Uint8Array(longSource).set([3, 7, 11, 15]);
+            const shorter = longSource.transfer(2);
+            "#,
+        ),
+        TestAction::assert("shorter.byteLength === 2"),
+        TestAction::assert("new Uint8Array(shorter)[0] === 3 && new Uint8Array(shorter)[1] === 7"),
+    ]);
+}
+
+#[cfg(any(feature = "experimental", feature = "array-buffer-transfer"))]
+#[test]
+fn transfer_preserves_or_removes_resizability_as_requested() {
+    run_test_actions([
+        TestAction::run(
+            r#"
+            const resizableSource = new ArrayBuffer(2, { maxByteLength: 8 });
+            new Uint8Array(resizableSource).set([17, 19]);
+            const resizableResult = resizableSource.transfer(4);
+            const fixedSource = new ArrayBuffer(2, { maxByteLength: 8 });
+            new Uint8Array(fixedSource).set([23, 29]);
+            const fixedResult = fixedSource.transferToFixedLength(4);
+            "#,
+        ),
+        TestAction::assert(
+            "resizableResult.resizable === true && resizableResult.maxByteLength === 8",
+        ),
+        TestAction::assert(
+            "new Uint8Array(resizableResult)[0] === 17 && new Uint8Array(resizableResult)[1] === 19",
+        ),
+        TestAction::assert("fixedResult.resizable === false && fixedResult.maxByteLength === 4"),
+        TestAction::assert(
+            "new Uint8Array(fixedResult)[0] === 23 && new Uint8Array(fixedResult)[1] === 29",
+        ),
+        TestAction::assert("resizableSource.detached === true && fixedSource.detached === true"),
+    ]);
+}
+
+#[cfg(any(feature = "experimental", feature = "array-buffer-transfer"))]
+#[test]
+fn transfer_errors_do_not_detach_the_source() {
+    run_test_actions([
+        TestAction::run(
+            r#"
+            const source = new ArrayBuffer(2);
+            new Uint8Array(source).set([31, 37]);
+            let invalidLengthThrew = false;
+            try { source.transfer(-1); } catch (error) { invalidLengthThrew = error instanceof RangeError; }
+            const capped = new ArrayBuffer(2, { maxByteLength: 4 });
+            let maximumLengthThrew = false;
+            try { capped.transfer(5); } catch (error) { maximumLengthThrew = error instanceof RangeError; }
+            let invalidReceiverThrew = false;
+            try { ArrayBuffer.prototype.transfer.call({}); } catch (error) { invalidReceiverThrew = error instanceof TypeError; }
+            const detached = source.transferToFixedLength();
+            let detachedSourceThrew = false;
+            try { source.transfer(); } catch (error) { detachedSourceThrew = error instanceof TypeError; }
+            let detachedGetterReceiverThrew = false;
+            try { Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'detached').get.call({}); }
+            catch (error) { detachedGetterReceiverThrew = error instanceof TypeError; }
+            "#,
+        ),
+        TestAction::assert("invalidLengthThrew && maximumLengthThrew && invalidReceiverThrew"),
+        TestAction::assert("capped.detached === false && capped.byteLength === 2"),
+        TestAction::assert("source.detached === true && detached.byteLength === 2"),
+        TestAction::assert(
+            "new Uint8Array(detached)[0] === 31 && new Uint8Array(detached)[1] === 37",
+        ),
+        TestAction::assert("detachedSourceThrew && detachedGetterReceiverThrew"),
+    ]);
+}
+
+#[cfg(any(feature = "experimental", feature = "array-buffer-transfer"))]
+#[test]
+fn transfer_respects_host_buffer_limit_without_detaching_source() {
+    let mut context = ContextBuilder::new()
+        .host_hooks(std::rc::Rc::new(TransferLimitHooks))
+        .build()
+        .unwrap();
+    let result = context
+        .eval(Source::from_bytes(
+            r#"
+            const source = new ArrayBuffer(2);
+            let transferRejected = false;
+            try { source.transfer(5); }
+            catch (error) { transferRejected = error instanceof RangeError; }
+            transferRejected && !source.detached && source.byteLength === 2
+            "#,
+        ))
+        .unwrap();
+
+    assert_eq!(result.as_boolean(), Some(true));
+}
+
+#[cfg(not(any(feature = "experimental", feature = "array-buffer-transfer")))]
+#[test]
+fn transfer_apis_are_absent_without_their_features() {
+    run_test_actions([
+        TestAction::assert("typeof ArrayBuffer.prototype.transfer === 'undefined'"),
+        TestAction::assert("typeof ArrayBuffer.prototype.transferToFixedLength === 'undefined'"),
+        TestAction::assert(
+            "Object.getOwnPropertyDescriptor(ArrayBuffer.prototype, 'detached') === undefined",
+        ),
+    ]);
+}
+
 #[test]
 fn create_byte_data_block() {
     run_test_actions([TestAction::inspect_context(|context| {
