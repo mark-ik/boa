@@ -166,6 +166,24 @@ impl BuiltInConstructor for FinalizationRegistry {
                 receiver: async_channel::Receiver<()>,
                 context: &RefCell<&mut Context>,
             ) -> JsResult<JsValue> {
+                // Keep a replacement waiter queued before awaiting. `SimpleJobExecutor` drops
+                // pending async jobs when a drain reaches quiescence, so the queued replacement
+                // must survive independently for the next drain. It only holds weak registry
+                // ownership and exits on its next poll after the registry is gone.
+                if weak_registry.upgrade().is_none() {
+                    return Ok(JsValue::undefined());
+                }
+
+                let next_registry = weak_registry.clone();
+                let next_receiver = receiver.clone();
+                context
+                    .borrow_mut()
+                    .enqueue_job(Job::FinalizationRegistryCleanupJob(NativeAsyncJob::new(
+                        async move |context| {
+                            inner_cleanup(next_registry, next_receiver, context).await
+                        },
+                    )));
+
                 let Ok(()) = receiver.recv().await else {
                     return Ok(JsValue::undefined());
                 };
@@ -175,12 +193,6 @@ impl BuiltInConstructor for FinalizationRegistry {
                 };
 
                 let result = FinalizationRegistry::cleanup(&registry, &mut context.borrow_mut());
-
-                context
-                    .borrow_mut()
-                    .enqueue_job(Job::FinalizationRegistryCleanupJob(NativeAsyncJob::new(
-                        async move |context| inner_cleanup(weak_registry, receiver, context).await,
-                    )));
 
                 result.map(|()| JsValue::undefined())
             }

@@ -571,6 +571,20 @@ impl JsPromise {
             .map_err(Into::into)
     }
 
+    /// Attaches reactions without creating a result promise or consulting promise species.
+    ///
+    /// This is useful for hosts that only need to observe settlement. Unlike [`Self::then`],
+    /// this method returns no promise and ignores the reaction callbacks' return values.
+    #[inline]
+    pub fn perform_promise_then(
+        &self,
+        on_fulfilled: Option<JsFunction>,
+        on_rejected: Option<JsFunction>,
+        context: &mut Context,
+    ) {
+        Promise::perform_promise_then(&self.inner, on_fulfilled, on_rejected, None, context);
+    }
+
     /// Schedules a callback to run when the promise is rejected.
     ///
     /// Equivalent to the [`Promise.prototype.catch`] method.
@@ -1457,5 +1471,91 @@ impl Future for JsFuture {
 
         inner.task = Some(cx.waker().clone());
         task::Poll::Pending
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::{Source, TestAction, run_test_actions};
+
+    use super::*;
+
+    #[test]
+    fn perform_promise_then_does_not_observe_species() {
+        run_test_actions([
+            TestAction::run(
+                "globalThis.speciesHits = 0; \
+                 globalThis.seen = 0; \
+                 globalThis.promise = Promise.resolve(42); \
+                 Object.defineProperty(promise, 'constructor', { \
+                     get() { speciesHits++; return Promise; } \
+                 });",
+            ),
+            TestAction::inspect_context(|context| {
+                let promise = context
+                    .eval(Source::from_bytes("promise"))
+                    .unwrap()
+                    .as_promise()
+                    .unwrap();
+                let callback = context
+                    .eval(Source::from_bytes("value => { seen = value; }"))
+                    .unwrap()
+                    .as_callable()
+                    .and_then(JsFunction::from_object)
+                    .unwrap();
+
+                promise.perform_promise_then(Some(callback), None, context);
+                context.run_jobs().unwrap();
+            }),
+            TestAction::assert_eq("seen", 42),
+            TestAction::assert_eq("speciesHits", 0),
+            TestAction::run("promise.then(() => {});"),
+            TestAction::assert_eq("speciesHits", 1),
+        ]);
+    }
+
+    #[test]
+    fn perform_promise_then_propagates_handler_throw_without_panicking() {
+        run_test_actions([
+            TestAction::run(
+                "globalThis.thrownValue = {}; \
+                 globalThis.promise = Promise.resolve(42);",
+            ),
+            TestAction::inspect_context(|context| {
+                let promise = context
+                    .eval(Source::from_bytes("promise"))
+                    .unwrap()
+                    .as_promise()
+                    .unwrap();
+                let callback = context
+                    .eval(Source::from_bytes("() => { throw thrownValue; }"))
+                    .unwrap()
+                    .as_callable()
+                    .and_then(JsFunction::from_object)
+                    .unwrap();
+                let expected = context.eval(Source::from_bytes("thrownValue")).unwrap();
+
+                promise.perform_promise_then(Some(callback), None, context);
+                let error = context.run_jobs().unwrap_err();
+                assert_eq!(error.as_opaque(), Some(&expected));
+            }),
+        ]);
+    }
+
+    #[test]
+    fn perform_promise_then_accepts_an_empty_fulfillment_handler() {
+        run_test_actions([
+            TestAction::run("globalThis.promise = Promise.resolve(42);"),
+            TestAction::inspect_context(|context| {
+                let promise = context
+                    .eval(Source::from_bytes("promise"))
+                    .unwrap()
+                    .as_promise()
+                    .unwrap();
+
+                promise.perform_promise_then(None, None, context);
+                context.run_jobs().unwrap();
+            }),
+        ]);
     }
 }

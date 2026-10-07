@@ -2643,13 +2643,14 @@ fn new_promise_reaction_job(
             None => {
                 // f. If promiseCapability is undefined, then
                 //    i. Assert: handlerResult is not an abrupt completion.
-                assert!(
-                    handler_result.is_ok(),
-                    "Assertion: <handlerResult is not an abrupt completion> failed"
-                );
-
-                // ii. Return empty.
-                Ok(JsValue::undefined())
+                // Native PerformPromiseThen observers have no result capability to reject, so
+                // surface an abrupt completion through the host job path instead of panicking.
+                // This preserves the exact thrown value for the caller of `run_jobs`.
+                match handler_result {
+                    Err(reason) => Err(JsError::from_opaque(reason)),
+                    // ii. Return empty.
+                    Ok(_) => Ok(JsValue::undefined()),
+                }
             }
             Some(promise_capability_record) => {
                 // g. Assert: promiseCapability is a PromiseCapability Record.

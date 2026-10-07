@@ -963,8 +963,14 @@ impl JobExecutor for SimpleJobExecutor {
                 group.insert(job.call(context));
             }
 
-            for job in mem::take(&mut *self.finalization_registry_jobs.borrow_mut()) {
-                fr_group.insert(job.call(context));
+            // A pending registry waiter queues its replacement before it awaits a GC signal.
+            // Keep those replacements queued while this run already has waiters in its local
+            // future group. Otherwise every regular-job turn would start another waiter for the
+            // same registry, and all of them would be dropped together at quiescence.
+            if fr_group.is_empty() {
+                for job in mem::take(&mut *self.finalization_registry_jobs.borrow_mut()) {
+                    fr_group.insert(job.call(context));
+                }
             }
 
             // Dispatch all past-due timeout jobs before the termination check.
