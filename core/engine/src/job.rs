@@ -1021,6 +1021,10 @@ impl JobExecutor for SimpleJobExecutor {
                         self.clear();
                         return Err(err);
                     }
+                    // A single registry cleanup future can complete while other registry
+                    // waiters remain pending. Continue the loop so each already-ready cleanup
+                    // is drained before quiescence is declared.
+                    Some(Ok(_)) => {}
                     _ if !self.is_empty() => {}
                     _ => break,
                 }
